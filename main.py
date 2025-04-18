@@ -1,7 +1,7 @@
 import time
 import ntptime
 import network
-from machine import Pin
+from machine import Pin, lightsleep
 
 from env import variables
 
@@ -10,7 +10,8 @@ sta_if = network.WLAN(network.STA_IF)
 LED = Pin(0, Pin.OUT)
 BUILTIN_LED = Pin(2, Pin.OUT)
 
-BUILTIN_LED.value(0)  # Turn on the built-in LED to indicate the device is running (inverted for built-in LED)
+# Turn on the built-in LED to indicate the device is running (inverted for built-in LED)
+BUILTIN_LED.value(0)
 
 BIN_DAYS = {
     'Monday': 0,
@@ -23,6 +24,8 @@ BIN_DAYS = {
 }
 
 bin_day = BIN_DAYS['Thursday']  # Thursday
+bin_day_time = 11  # 11:00
+notify_offset_hours = 20  # Number of hours before bin day to notify
 
 
 def connect_to_wifi(ssid, password):
@@ -41,47 +44,64 @@ def get_day():
     return day
 
 
-def get_time_hour():
-    """Returns the current hour (0-23)"""
-    hour = time.localtime()[3]
-    return hour
+def get_time():
+    """Returns array containing current [hour, minutes, seconds]."""
+    l_time = time.localtime()
+    hour = l_time[3]
+    minutes = l_time[4]
+    secs = l_time[5]
+
+    return [hour, minutes, secs]
 
 
 def is_bin_day():
-    """Returns whether it is bin day"""
-    return get_day() == bin_day
+    """Returns True if it is within the bin day notification offset."""
+    hours_until_bin_day = get_seconds_until_next_bin_day() / 60 / 60
+
+    return hours_until_bin_day <= notify_offset_hours
 
 
 def get_seconds_until_next_bin_day():
-    """Uses the current day in the week and hour to calculate the seconds until 12:00am the day before bin day"""
-    current_day = get_day()
-    current_hour = get_time_hour()
+    """Calculates the seconds until bin day using the current time and day in the week."""
 
-    # Calculate the number of days until bin day
-    days_until_bin_day = (bin_day - current_day) % 7
+    # Get the current time
+    h, m, s = get_time()
 
-    # If it's the day before bin day, set the hour to 0
-    if days_until_bin_day == 1:
-        current_hour = 0
+    # Calculate the number of whole days until bin day
+    days_until_bin_day = (bin_day - get_day()) % 7
 
-    # Calculate the total minutes until bin day at 12:00am
-    total_minutes_until_bin_day = (days_until_bin_day * 24 * 60) - (current_hour * 60)
+    # Minus the current time from the bin day time and add the number of days
+    hours_until_bin_day = (bin_day_time
+                           - h
+                           - m / 60
+                           - s / 60 / 60)
+    + (days_until_bin_day * 24)
 
-    return total_minutes_until_bin_day * 60  # Convert to seconds
+    # If value is negative, add 7 days to it
+    hours_until_bin_day %= 7 * 24
+
+    return round(hours_until_bin_day * 60 * 60)  # Convert to seconds
 
 
 def main():
-    BUILTIN_LED.value(1) # Turn off buiult-in LED (inverted for built-in LED)
+    """
+        Main function that checks whether it is bin day.
+        If it is within the notification period, it flashes the LED every 2.5s.
+    """
+    BUILTIN_LED.value(1)  # Turn off buiult-in LED (inverted for built-in LED)
+
     while True:
-        if is_bin_day():
+        while is_bin_day():
             LED.value(1)  # Turn on the LED
-            time.sleep(12 * 60 * 60)  # Sleep for 12 hours
+            time.sleep(0.5)
             LED.value(0)
+            lightsleep(2500)  # Sleep for 2.5 seconds
 
-        time.sleep(get_seconds_until_next_bin_day())
+        # Sleep until the next bin day (ms)
+        lightsleep(get_seconds_until_next_bin_day() * 1000)
 
 
-print("Connecting to wifi...")
 connect_to_wifi(variables['SSID'], variables['PASS'])
 ntptime.settime()
+sta_if.active(False)  # Disable WiFi to save power
 main()
